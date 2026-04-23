@@ -1,0 +1,3 @@
+# Ignorar firmware local y cualquier repo Git anidado dentro de esa carpeta
+.firmware/
+firmware/

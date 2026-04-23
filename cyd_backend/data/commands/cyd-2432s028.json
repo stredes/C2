@@ -1,0 +1,10 @@
+[
+  {
+    "command_id": "6085615f5f1a8317",
+    "device_id": "cyd-2432s028",
+    "command": "PING",
+    "args": {},
+    "queued_at": "2026-04-23T17:06:47+00:00",
+    "status": "queued"
+  }
+]
