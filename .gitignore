@@ -43,10 +43,6 @@ env/
 *.log
 data/*.log
 
-# Backend data
-cyd_backend/data/
-*.json
-!cyd_backend/config/*.example.json
 
 # PlatformIO
 .pio/
