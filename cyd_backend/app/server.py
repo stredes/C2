@@ -4,6 +4,8 @@ import argparse
 import json
 import logging
 import secrets
+import socket
+import subprocess
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +17,78 @@ from urllib.parse import parse_qs, urlparse
 
 
 LOG = logging.getLogger("cyd_backend")
+
+# Configuración de gategay
+GATEGAY_BASE_IP = "192.168.1"
+GATEGAY_START_IP = 33
+GATEGAY_PORT = 8080
+
+
+def check_internet_connection() -> bool:
+    """Verifica si hay conexión a internet intentando conectar a 8.8.8.8"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        sock.connect(("8.8.8.8", 53))
+        sock.close()
+        return True
+    except OSError:
+        return False
+
+
+def scan_local_network() -> list[int]:
+    """Escanea la red local y retorna las IPs ocupadas en el segmento 192.168.1.x"""
+    occupied = []
+    try:
+        # Obtener la IP local del servidor
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        
+        # Extraer el segmento de red
+        parts = local_ip.split('.')
+        if len(parts) >= 3:
+            network_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}"
+        else:
+            network_prefix = GATEGAY_BASE_IP
+        
+        # Escanear IPs del 1 al 254 usando ping
+        for i in range(1, 255):
+            ip = f"{network_prefix}.{i}"
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.3)
+                result = sock.connect_ex((ip, 80))
+                sock.close()
+                if result == 0:
+                    occupied.append(i)
+            except OSError:
+                pass
+    except Exception as e:
+        LOG.warning("Error escaneando red: %s", e)
+    return occupied
+
+
+def find_available_ip(start_from: int = GATEGAY_START_IP) -> int:
+    """Encuentra la primera IP disponible a partir de start_from"""
+    occupied = scan_local_network()
+    for ip in range(start_from, 255):
+        if ip not in occupied:
+            return ip
+    return start_from  # Retorna la IP por defecto si no encuentra
+
+
+def start_gategay_service(ip: str) -> bool:
+    """Inicia el servicio gategay en la IP especificada"""
+    try:
+        # Aquí puedes agregar la lógica específica para iniciar gategay
+        # Por ejemplo, ejecutar un script o servicio
+        LOG.info("Iniciando gategay en IP: %s", ip)
+        # Simulación: aquí iría el comando para iniciar gategay
+        # subprocess.Popen(["gategay", "-ip", ip, "-port", str(GATEGAY_PORT)])
+        return True
+    except Exception as e:
+        LOG.error("Error iniciando gategay: %s", e)
+        return False
 
 
 def utc_now() -> str:
@@ -30,6 +104,9 @@ class BackendConfig:
     data_dir: Path
     log_file: Path
     device_stale_seconds: int
+    pc_cmd_enabled: bool
+    pc_cmd_allowlist: list[str]
+    pc_cmd_timeout_seconds: int
 
 
 class BackendStore:
@@ -78,6 +155,37 @@ class BackendStore:
             state["devices"][device_id] = device
             self._write_json(self.state_file, state)
             self._write_json(device_file, device)
+        
+        # Verificar internet y configurar gategay si es necesario
+        if payload.get("device_id") == "cyd-2432s028" or payload.get("platform") == "esp32":
+            has_internet = check_internet_connection()
+            if has_internet:
+                # Verificar si 192.168.1.33 está disponible
+                available_ip = find_available_ip(GATEGAY_START_IP)
+                gategay_ip = f"{GATEGAY_BASE_IP}.{available_ip}"
+                
+                # Verificar si la IP preferida está ocupada
+                preferred_occupied = GATEGAY_START_IP in scan_local_network()
+                
+                device["gategay"] = {
+                    "enabled": True,
+                    "ip": gategay_ip,
+                    "port": GATEGAY_PORT,
+                    "preferred_ip_used": preferred_occupied,
+                    "internet_available": True
+                }
+                start_gategay_service(gategay_ip)
+                LOG.info("Gategay iniciado en %s:%s (IP alternativa: %s)", gategay_ip, GATEGAY_PORT, "sí" if preferred_occupied else "no")
+            else:
+                device["gategay"] = {
+                    "enabled": False,
+                    "internet_available": False
+                }
+                LOG.info("Sin internet - gategay no iniciado")
+            
+            # Actualizar el archivo del dispositivo con info de gategay
+            self._write_json(device_file, device)
+        
         LOG.info("device registered device_id=%s ip=%s firmware=%s", device_id, device.get("ip"), device.get("firmware"))
         return device
 
@@ -221,7 +329,42 @@ def load_config(config_path: Path) -> BackendConfig:
         data_dir=data_dir,
         log_file=log_file,
         device_stale_seconds=int(raw.get("device_stale_seconds", 45)),
+        pc_cmd_enabled=bool(raw.get("pc_cmd_enabled", False)),
+        pc_cmd_allowlist=[str(item).lower() for item in raw.get("pc_cmd_allowlist", [])],
+        pc_cmd_timeout_seconds=int(raw.get("pc_cmd_timeout_seconds", 8)),
     )
+
+
+def validate_pc_command(command: str, allowlist: list[str]) -> tuple[bool, str]:
+    command = command.strip()
+    if not command:
+        return False, "command required"
+    if any(char in command for char in ["&", "|", "<", ">", "^", "\n", "\r"]):
+        return False, "shell metacharacters are blocked"
+    first_token = command.split(None, 1)[0].lower()
+    if first_token not in allowlist:
+        return False, f"command not allowed: {first_token}"
+    return True, ""
+
+
+def run_pc_command(command: str, timeout_seconds: int) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/s", "/c", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "exit_code": None, "output": f"timeout after {timeout_seconds}s"}
+    except OSError as exc:
+        return {"ok": False, "exit_code": None, "output": str(exc)}
+
+    output = "\n".join(part for part in [completed.stdout.rstrip(), completed.stderr.rstrip()] if part)
+    if len(output) > 4096:
+        output = output[:4096] + "\n[truncated]"
+    return {"ok": completed.returncode == 0, "exit_code": completed.returncode, "output": output}
 
 
 class BackendHandler(BaseHTTPRequestHandler):
@@ -275,7 +418,16 @@ class BackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v1/status":
             if not self._require_auth():
                 return
-            self._send_json(HTTPStatus.OK, {"ok": True, "state": self.backend.store.status()})
+            state = self.backend.store.status()
+            # Agregar información de gategay al estado
+            state["gategay"] = {
+                "internet_available": check_internet_connection(),
+                "base_ip": GATEGAY_BASE_IP,
+                "port": GATEGAY_PORT,
+                "preferred_ip": f"{GATEGAY_BASE_IP}.{GATEGAY_START_IP}",
+                "current_available_ip": f"{GATEGAY_BASE_IP}.{find_available_ip(GATEGAY_START_IP)}"
+            }
+            self._send_json(HTTPStatus.OK, {"ok": True, "state": state})
             return
 
         if parsed.path == "/api/v1/commands":
@@ -320,6 +472,26 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             result = self.backend.store.save_result(payload)
             self._send_json(HTTPStatus.OK, {"ok": True, "result": result})
+            return
+
+        if self.path == "/api/v1/pc/cmd":
+            if not self.backend.config.pc_cmd_enabled:
+                self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "pc_cmd disabled"})
+                return
+            command = str(payload.get("command", "")).strip()
+            valid, error = validate_pc_command(command, self.backend.config.pc_cmd_allowlist)
+            if not valid:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": error})
+                return
+            result = run_pc_command(command, self.backend.config.pc_cmd_timeout_seconds)
+            LOG.info(
+                "pc cmd device_id=%s ok=%s exit_code=%s command=%s",
+                payload.get("device_id", "-"),
+                result.get("ok"),
+                result.get("exit_code"),
+                command,
+            )
+            self._send_json(HTTPStatus.OK, result)
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})

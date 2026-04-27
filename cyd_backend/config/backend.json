@@ -5,5 +5,18 @@
   "secret_key": "cambia-esta-clave-larga",
   "data_dir": "data",
   "log_file": "data/backend.log",
-  "device_stale_seconds": 45
+  "device_stale_seconds": 45,
+  "pc_cmd_enabled": true,
+  "pc_cmd_allowlist": [
+    "echo",
+    "dir",
+    "ipconfig",
+    "hostname",
+    "whoami",
+    "ver",
+    "cd",
+    "time",
+    "date"
+  ],
+  "pc_cmd_timeout_seconds": 8
 }

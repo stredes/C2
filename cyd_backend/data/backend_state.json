@@ -1,4 +1,21 @@
 {
   "created_at": "2026-04-23T14:01:43+00:00",
-  "devices": {}
+  "devices": {
+    "cyd-2usb": {
+      "device_id": "cyd-2usb",
+      "label": "Bruce cyd-2usb",
+      "platform": "esp32",
+      "ip": "192.168.1.161",
+      "firmware": "bruce-dev",
+      "registered_at": "2026-04-24T17:08:12+00:00",
+      "last_seen": "2026-04-24T17:53:44+00:00",
+      "status": "online",
+      "metrics": {
+        "free_heap": 37808,
+        "free_psram": 0,
+        "rssi": -38,
+        "uptime_ms": 1501638
+      }
+    }
+  }
 }
