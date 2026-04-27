@@ -4,6 +4,7 @@ set -eu
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 CONFIG_PATH="${1:-"$ROOT_DIR/config/backend.termux.json"}"
 
+printf 'DEBUG: Buscando config en: %s\n' "$CONFIG_PATH" >&2
 if [ ! -f "$CONFIG_PATH" ]; then
   printf 'No existe el archivo de config: %s\n' "$CONFIG_PATH" >&2
   printf 'Copia primero config/backend.termux.json.example a config/backend.termux.json\n' >&2
